@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from './useAuth';
+import { PRICE_IDS } from '@/lib/stripe';
 import type { SubscriptionPlan, CheckoutSessionResponse } from '@/types';
 
 // 定价配置
@@ -30,7 +31,7 @@ export const PRICING_PLANS = [
     name: '专业版',
     description: '适合专业设计师和创作者',
     price: 29,
-    priceId: 'price_pro_monthly',
+    priceId: PRICE_IDS.pro,
     period: 'month' as const,
     features: [
       '每月处理 500 张图片',
@@ -55,7 +56,7 @@ export const PRICING_PLANS = [
     name: '企业版',
     description: '适合团队和企业级需求',
     price: 99,
-    priceId: 'price_enterprise_monthly',
+    priceId: PRICE_IDS.enterprise,
     period: 'month' as const,
     features: [
       '无限图片处理',
@@ -84,27 +85,40 @@ export function useSubscription() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 创建结账会话（模拟）
+  // 创建 Stripe Checkout 会话
   const createCheckoutSession = async (planId: SubscriptionPlan): Promise<CheckoutSessionResponse | null> => {
     setIsLoading(true);
     setError(null);
 
     try {
-      // 模拟API调用
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
       const plan = PRICING_PLANS.find(p => p.id === planId);
-      if (!plan) {
-        throw new Error('计划不存在');
+      if (!plan || planId === 'free') {
+        throw new Error('无效的计划');
       }
 
-      // 模拟返回结账会话
-      const sessionId = `sess_${Math.random().toString(36).substr(2, 9)}`;
-      
-      return {
-        sessionId,
-        url: `#/checkout?session=${sessionId}&plan=${planId}`,
-      };
+      // 调用后端 API 创建 Checkout Session
+      const response = await fetch('/api/create-checkout-session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          priceId: plan.priceId,
+          userId: user?.id,
+          email: user?.email,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('创建支付会话失败');
+      }
+
+      const { sessionId, url } = await response.json();
+
+      // 跳转到 Stripe Checkout 页面
+      window.location.href = url;
+
+      return { sessionId, url };
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建结账会话失败');
       return null;
@@ -113,12 +127,10 @@ export function useSubscription() {
     }
   };
 
-  // 处理订阅成功
+  // 处理订阅成功（从 Stripe Webhook 或回调处理）
   const handleSubscriptionSuccess = async (planId: SubscriptionPlan) => {
     setIsLoading(true);
     try {
-      // 模拟验证
-      await new Promise(resolve => setTimeout(resolve, 1000));
       updatePlan(planId);
       return true;
     } catch (err) {
@@ -133,7 +145,21 @@ export function useSubscription() {
   const cancelSubscription = async () => {
     setIsLoading(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // 调用后端 API 取消订阅
+      const response = await fetch('/api/cancel-subscription', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: user?.id,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('取消订阅失败');
+      }
+
       updatePlan('free');
       return true;
     } catch (err) {
@@ -161,7 +187,7 @@ export function useSubscription() {
       case 'imagesPerMonth':
         return usage.imagesProcessed < limit;
       case 'maxFileSize':
-        return true; // 在上传时检查
+        return true;
       case 'storageGB':
         return usage.storageUsed < limit * 1024;
       case 'apiCalls':
